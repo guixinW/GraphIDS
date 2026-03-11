@@ -180,3 +180,21 @@ class Parser(argparse.ArgumentParser):
             default=512,
             help="Window size for the anomaly detection algorithm",
         )
+        self.add_argument(
+            "--alpha",
+            type=float,
+            default=0.1,
+            help="Weight for the contrastive loss",
+        )
+        self.add_argument(
+            "--temperature",
+            type=float,
+            default=0.1,
+            help="Temperature parameter for the InfoNCE contrastive loss",
+        )
+        self.add_argument(
+            "--proj_dim",
+            type=int,
+            default=128,
+            help="Dimension of the projection head for contrastive learning",
+        )

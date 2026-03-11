@@ -24,13 +24,19 @@ def train(
     patience,
     checkpoint,
     device="cuda",
+    alpha=0.1,
+    temperature=0.1,
 ):
     best_pr_auc = 0.0
     cnt_wait = 0
     criterion = nn.MSELoss(reduction="none")
     total_train_loss = 0
+    total_train_loss_mse = 0
+    total_train_loss_cl = 0
     for epoch in (pbar := tqdm(range(start_epoch + 1, num_epochs + 1), desc="Epochs")):
         total_train_loss = 0
+        total_train_loss_mse = 0
+        total_train_loss_cl = 0
         model.train()
         for batch in train_loader:
             batch.batch_edge_couples = batch.edge_label_index.t()
@@ -53,6 +59,8 @@ def train(
                 collate_fn=collate_fn,
             )
             accumulated_loss = torch.tensor(0.0, device=device)
+            accumulated_loss_mse = torch.tensor(0.0, device=device)
+            accumulated_loss_cl = torch.tensor(0.0, device=device)
             seq_count = 0
             for ae_batch, mask in ae_train_loader:
                 outputs = model.transformer(ae_batch, mask)
@@ -63,20 +71,60 @@ def train(
                 # compared to a standard stop-gradient approach, likely by
                 # enforcing tighter coupling between the encoder and transformer
                 # during training.
-                loss = criterion(outputs, ae_batch)
-                loss = torch.sum(loss * mask) / torch.sum(mask)
+                loss_mse = criterion(outputs, ae_batch)
+                loss_mse = torch.sum(loss_mse * mask) / torch.sum(mask)
+
+                # Cross-View Contrastive Learning (InfoNCE)
+                valid_mask = mask.sum(dim=-1) > 0 # Find valid tokens
+                # Only use a subset to avoid OOM for similarity matrix
+                valid_indices = torch.nonzero(valid_mask, as_tuple=True)
+                num_valid = len(valid_indices[0])
+                if num_valid > 0:
+                    max_samples = 2048
+                    if num_valid > max_samples:
+                        perm = torch.randperm(num_valid, device=device)[:max_samples]
+                        idx_0 = valid_indices[0][perm]
+                        idx_1 = valid_indices[1][perm]
+                    else:
+                        idx_0 = valid_indices[0]
+                        idx_1 = valid_indices[1]
+                    
+                    z_graph = model.projector(ae_batch[idx_0, idx_1])
+                    z_trans = model.projector(outputs[idx_0, idx_1])
+                    
+                    z_graph = nn.functional.normalize(z_graph, dim=1)
+                    z_trans = nn.functional.normalize(z_trans, dim=1)
+                    
+                    # InfoNCE Loss calculation
+                    logits = torch.matmul(z_graph, z_trans.T) / temperature
+                    labels = torch.arange(len(z_graph), device=device)
+                    # Symmetrical contrastive loss
+                    loss_cl_1 = nn.functional.cross_entropy(logits, labels)
+                    loss_cl_2 = nn.functional.cross_entropy(logits.T, labels)
+                    loss_cl = (loss_cl_1 + loss_cl_2) / 2
+                else:
+                    loss_cl = torch.tensor(0.0, device=device)
+                
+                loss = loss_mse + alpha * loss_cl
+
                 accumulated_loss += loss
+                accumulated_loss_mse += loss_mse
+                accumulated_loss_cl += loss_cl
                 seq_count += 1
 
             # Calculate the mean loss for the batch and backpropagate through both components
             if seq_count > 0:
                 loss = accumulated_loss / seq_count
                 total_train_loss += loss.item()
+                total_train_loss_mse += (accumulated_loss_mse / seq_count).item()
+                total_train_loss_cl += (accumulated_loss_cl / seq_count).item()
                 loss.backward()
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
                 optimizer.step()
                 optimizer.zero_grad()
         total_train_loss /= len(train_loader)
+        total_train_loss_mse /= len(train_loader)
+        total_train_loss_cl /= len(train_loader)
         val_loss, val_errors, val_labels = validate(
             model, val_loader, ae_batch_size, window_size, device
         )
@@ -108,16 +156,17 @@ def train(
                 break
         pbar.set_postfix(
             {
-                "train_loss": total_train_loss,
-                "val_loss": val_loss,
-                "val_pr_auc": val_pr_auc,
-                "test_f1": test_f1,
-                "test_pr_auc": test_pr_auc,
+                "tot_loss": f"{total_train_loss:.4f}",
+                "mse": f"{total_train_loss_mse:.4f}",
+                "cl": f"{total_train_loss_cl:.4f}",
+                "val_pr_auc": f"{val_pr_auc:.4f}",
             }
         )
         run.log(
             {
                 "train_loss": total_train_loss,
+                "train_loss_mse": total_train_loss_mse,
+                "train_loss_cl": total_train_loss_cl,
                 "val_loss": val_loss,
                 "val_pr_auc": val_pr_auc,
                 "test_f1": test_f1,

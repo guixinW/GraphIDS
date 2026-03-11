@@ -212,6 +212,7 @@ class GraphIDS(nn.Module):
         positional_encoding=None,
         agg_type="mean",
         mask_ratio=0.15,
+        proj_dim=128,
     ):
         super().__init__()
         self.encoder = SAGELayer(ndim_in, edim_in, edim_out, agg_type, dropout)
@@ -224,6 +225,13 @@ class GraphIDS(nn.Module):
             window_size,
             positional_encoding,
             mask_ratio,
+        )
+        # Projection Head for Contrastive Learning
+        self.projector = nn.Sequential(
+            nn.Linear(embed_dim, embed_dim),
+            nn.BatchNorm1d(embed_dim),
+            nn.ReLU(),
+            nn.Linear(embed_dim, proj_dim),
         )
 
     def save_checkpoint(self, path, optimizer=None, epoch=0, threshold=None):

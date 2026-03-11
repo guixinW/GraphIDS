@@ -59,6 +59,7 @@ def main(run):
         positional_encoding=config.positional_encoding,
         agg_type=config.agg_type,
         mask_ratio=config.mask_ratio,
+        proj_dim=config.proj_dim,
     ).to(device)
 
     optimizer = torch.optim.AdamW(
@@ -159,6 +160,8 @@ def main(run):
             run,
             config.patience,
             checkpoint,
+            alpha=config.alpha,
+            temperature=config.temperature,
         )
 
     print("Evaluating on test set...")
@@ -241,6 +244,9 @@ if __name__ == "__main__":
             "dropout": args.dropout,
             "positional_encoding": args.positional_encoding,
             "fraction": args.fraction,
+            "alpha": args.alpha,
+            "temperature": args.temperature,
+            "proj_dim": args.proj_dim,
         }
     if not args.wandb:
         os.environ["WANDB_MODE"] = "offline"
