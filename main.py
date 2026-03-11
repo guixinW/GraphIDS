@@ -261,5 +261,13 @@ if __name__ == "__main__":
     run.config["save_curve"] = args.save_curve
     run.config["seed"] = args.seed
     run.config["wandb"] = args.wandb
+    
+    # Inject new contrastive learning parameters if they are not in the loaded yaml config
+    if "alpha" not in run.config:
+        run.config["alpha"] = args.alpha
+    if "temperature" not in run.config:
+        run.config["temperature"] = args.temperature
+    if "proj_dim" not in run.config:
+        run.config["proj_dim"] = args.proj_dim
 
     main(run)
