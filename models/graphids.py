@@ -228,10 +228,10 @@ class GraphIDS(nn.Module):
         )
         # Projection Head for Contrastive Learning
         self.projector = nn.Sequential(
-            nn.Linear(embed_dim, embed_dim),
-            nn.BatchNorm1d(embed_dim),
+            nn.Linear(edim_out, edim_out),
+            nn.BatchNorm1d(edim_out),
             nn.ReLU(),
-            nn.Linear(embed_dim, proj_dim),
+            nn.Linear(edim_out, proj_dim),
         )
 
     def save_checkpoint(self, path, optimizer=None, epoch=0, threshold=None):
