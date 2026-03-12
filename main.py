@@ -18,7 +18,16 @@ warnings.filterwarnings(
     "ignore", message="The PyTorch API of nested tensors is in prototype stage"
 )
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+try:
+    if torch.cuda.is_available():
+        # Test if initialization works without throwing "no NVIDIA driver"
+        torch.cuda.init()
+        device = "cuda"
+    else:
+        device = "cpu"
+except Exception as e:
+    print(f"CUDA initialization failed, defaulting to CPU. Reason: {e}")
+    device = "cpu"
 
 
 def set_seed(seed):
