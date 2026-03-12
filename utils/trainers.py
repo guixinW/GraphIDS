@@ -2,11 +2,98 @@ import time
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+from abc import ABC, abstractmethod
 from sklearn.metrics import average_precision_score, f1_score
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 from utils.dataloaders import SequentialDataset, collate_fn
+
+
+class CLLoss(ABC):
+    """Abstract class to define losses in the CL framework that use one
+    positive pair and one negative pair"""
+
+    @abstractmethod
+    def loss(self, z1, z2_con_z1, z3, z1_rec, z2_con_z1_rec, z3_rec):
+        pass
+
+    def __call__(self, z1, z2_con_z1, z3, z1_rec, z2_con_z1_rec, z3_rec):
+        return self.loss(z1, z2_con_z1, z3, z1_rec, z2_con_z1_rec, z3_rec)
+
+
+class AnInfoNCELoss(CLLoss):
+    def __init__(self, batch_size, lambda_train, lambda_activation, device='cuda'):
+        self.lambda_train = lambda_train
+        self.lambda_activation = lambda_activation
+        self.mask = self.mask_correlated_samples(batch_size).to(device)
+        self.normalize = True
+        self.activation = torch.nn.functional.softplus
+
+    def mask_correlated_samples(self, batch_size):
+        N = batch_size
+        mask = np.ones((N,N))
+        mask -= np.diag(np.ones(N-1), 1)
+        mask[-1][0] = 0
+        mask = mask.astype('bool')
+        return torch.Tensor(mask).bool()
+    
+    @property
+    def effective_lambda(self):
+        return self.lambda_activation(self.lambda_train)
+
+    def loss(self, z1, z2_con_z1, z3, z1_rec, z2_con_z1_rec, z3_rec):
+        del z1, z2_con_z1, z3
+
+        batch_size = z1_rec.size(0)
+        N = 2 * batch_size
+
+        if self.normalize:
+            z1_rec = z1_rec / torch.norm(z1_rec, p=2, dim=-1, keepdim=True)
+            z2_con_z1_rec = z2_con_z1_rec / torch.norm(
+                z2_con_z1_rec, p=2, dim=-1, keepdim=True
+            )
+            if z3_rec is not None:
+                z3_rec = z3_rec / torch.norm(z3_rec, p=2, dim=-1, keepdim=True)
+        
+        def get_neg_term(z_a: torch.Tensor, z_b: torch.Tensor) -> torch.Tensor:
+            z_b = torch.roll(z_b, 1, 0)
+            partial_a = torch.einsum("ij,ij -> i", z_a,  self.effective_lambda * z_a)
+            partial_b = torch.einsum("ij,ij -> i", z_b,  self.effective_lambda * z_b)
+            neg = - partial_a.unsqueeze(1) / 2 \
+              - partial_b.unsqueeze(0) / 2 \
+              + torch.einsum("ij,kj -> ik", z_a,  self.effective_lambda * z_b)
+
+            # Remove pairs of identical samples
+            neg = neg[self.mask].reshape(len(z_a), -1)
+
+            return neg
+        
+        neg_cross = get_neg_term(z1_rec, z2_con_z1_rec)
+
+        neg = torch.cat((
+            torch.cat((get_neg_term(z1_rec, z1_rec), neg_cross), 1), 
+            torch.cat((get_neg_term(z2_con_z1_rec, z2_con_z1_rec), neg_cross), 1)
+        ), dim=0)
+        
+        diff_z1_rec_z2_con_z1_rec = z1_rec - z2_con_z1_rec
+        pos = - torch.einsum("ij,ij -> i", diff_z1_rec_z2_con_z1_rec,  self.effective_lambda * diff_z1_rec_z2_con_z1_rec) / 2 
+        
+        pos = torch.cat((pos, pos), dim=0).reshape(N, 1)        
+        neg_and_pos = torch.cat((neg, pos), dim=1)
+        loss_neg = torch.logsumexp(neg_and_pos , dim=1)
+   
+        loss_pos = -pos
+    
+        loss = loss_pos + loss_neg
+            
+        loss_mean = torch.mean(loss)
+        
+        loss_pos_mean, loss_neg_mean = torch.mean(loss_pos), torch.mean(loss_neg)
+    
+        return loss_mean, loss, [loss_pos_mean, loss_neg_mean]
 
 
 def train(
@@ -95,13 +182,22 @@ def train(
                     z_graph = nn.functional.normalize(z_graph, dim=1)
                     z_trans = nn.functional.normalize(z_trans, dim=1)
                     
-                    # InfoNCE Loss calculation
-                    logits = torch.matmul(z_graph, z_trans.T) / temperature
-                    labels = torch.arange(len(z_graph), device=device)
-                    # Symmetrical contrastive loss
-                    loss_cl_1 = nn.functional.cross_entropy(logits, labels)
-                    loss_cl_2 = nn.functional.cross_entropy(logits.T, labels)
-                    loss_cl = (loss_cl_1 + loss_cl_2) / 2
+                    # AnInfoNCE Loss calculation
+                    # Ensure effective_lambda parameter matches dimension (scalar or vector)
+                    # For simplicity, using a uniform lambda initially, or you can parameritize it
+                    lambda_train = torch.tensor(1.0, device=device)
+                    # Softplus activation for lambda
+                    lambda_activation = torch.nn.functional.softplus
+
+                    # Initialize AnInfoNCELoss passing current effective batch size
+                    an_info_nce = AnInfoNCELoss(batch_size=len(z_graph), 
+                                                lambda_train=lambda_train, 
+                                                lambda_activation=lambda_activation, 
+                                                device=device)
+                    
+                    # z1_rec = z_graph, z2_con_z1_rec = z_trans, others are not used (del)
+                    loss_cl, _, _ = an_info_nce(z1=None, z2_con_z1=None, z3=None, 
+                                                z1_rec=z_graph, z2_con_z1_rec=z_trans, z3_rec=None)
                 else:
                     loss_cl = torch.tensor(0.0, device=device)
                 
