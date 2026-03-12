@@ -59,7 +59,9 @@ class AnInfoNCELoss(CLLoss):
                 z3_rec = z3_rec / torch.norm(z3_rec, p=2, dim=-1, keepdim=True)
         
         def get_neg_term(z_a: torch.Tensor, z_b: torch.Tensor) -> torch.Tensor:
-            z_b = torch.roll(z_b, 1, 0)
+            # Random permutation avoids sequential bias in burst attacks
+            perm = torch.randperm(z_b.size(0), device=z_b.device)
+            z_b = z_b[perm]
             partial_a = torch.einsum("ij,ij -> i", z_a,  self.effective_lambda * z_a)
             partial_b = torch.einsum("ij,ij -> i", z_b,  self.effective_lambda * z_b)
             neg = - partial_a.unsqueeze(1) / 2 \
