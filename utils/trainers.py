@@ -272,7 +272,7 @@ def train(
             }
         )
     chk = torch.load(checkpoint, weights_only=True)
-    model.load_state_dict(chk["model_state_dict"])
+    model.load_state_dict(chk["model_state_dict"], strict=False)
     return model, chk["threshold"]
 
 
