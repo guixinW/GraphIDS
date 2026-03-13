@@ -40,3 +40,10 @@ positional_encoding:
   value: None
 fraction:
   value: null
+# --- Cross-View Contrastive Learning Hyperparameters ---
+alpha:
+  value: 0.05      # Weight for the contrastive loss
+temperature:
+  value: 0.1       # Temperature for InfoNCE scaling
+proj_dim:
+  value: 72        # Projection dim aligned with edim_out=72

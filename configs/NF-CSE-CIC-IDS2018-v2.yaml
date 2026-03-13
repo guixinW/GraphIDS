@@ -40,3 +40,10 @@ positional_encoding:
   value: None
 fraction:
   value: 0.2
+# --- Cross-View Contrastive Learning Hyperparameters ---
+alpha:
+  value: 0.01      # Low alpha: MSE must dominate for dense burst-attack datasets
+temperature:
+  value: 0.1       # Temperature for InfoNCE scaling
+proj_dim:
+  value: 64        # Projection dim aligned with edim_out=64

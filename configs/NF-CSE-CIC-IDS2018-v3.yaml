@@ -23,9 +23,9 @@ num_layers:
 mask_ratio:
   value: 0.15
 patience:
-  value: 20
+  value: 30        # Longer patience to avoid premature convergence on large dataset
 ae_batch_size:
-  value: 64
+  value: 32        # Smaller batch size to stabilize AnInfoNCE loss matrix
 window_size:
   value: 512
 step_percent:
@@ -40,3 +40,10 @@ positional_encoding:
   value: None
 fraction:
   value: 0.2
+# --- Cross-View Contrastive Learning Hyperparameters ---
+alpha:
+  value: 0.01      # Low alpha: MSE must dominate for dense burst-attack datasets
+temperature:
+  value: 0.1       # Temperature for InfoNCE scaling
+proj_dim:
+  value: 64        # Projection dim aligned with edim_out=64
