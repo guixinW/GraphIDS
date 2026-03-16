@@ -40,3 +40,12 @@ positional_encoding:
   value: None
 fraction:
   value: null
+
+# --- [Plan D] Dual-Mask Contrastive Learning ---
+# CL between two masked views of same input
+alpha:
+  value: 0.05
+temperature:
+  value: 0.1
+proj_dim:
+  value: 72

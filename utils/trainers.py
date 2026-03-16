@@ -63,20 +63,20 @@ def train(
             accumulated_loss_cl = torch.tensor(0.0, device=device)
             seq_count = 0
             for ae_batch, mask in ae_train_loader:
+                # ── View 1: standard forward pass (used for MSE loss) ──
                 outputs = model.transformer(ae_batch, mask)
-                # NOTE ON IMPLEMENTATION:
-                # We purposefully do not detach the target embedding here.
-                # Empirically, we observed that allowing gradients to flow through
-                # the target improves convergence speed and representation quality
-                # compared to a standard stop-gradient approach, likely by
-                # enforcing tighter coupling between the encoder and transformer
-                # during training.
                 loss_mse = criterion(outputs, ae_batch)
                 loss_mse = torch.sum(loss_mse * mask) / torch.sum(mask)
 
-                # Cross-View Contrastive Learning (InfoNCE)
-                valid_mask = mask.sum(dim=-1) > 0 # Find valid tokens
-                # Only use a subset to avoid OOM for similarity matrix
+                # ── [Plan D] Dual-Mask Cross-View Contrastive Learning ──
+                # The transformer internally generates a random attention mask each
+                # call (controlled by mask_ratio). Calling it twice on the same input
+                # produces two independently masked augmented views. CL is then applied
+                # between the two reconstruction outputs (NOT input vs output), removing
+                # the conflict with the anomaly detection mechanism.
+                outputs_v2 = model.transformer(ae_batch, mask)
+
+                valid_mask = mask.sum(dim=-1) > 0
                 valid_indices = torch.nonzero(valid_mask, as_tuple=True)
                 num_valid = len(valid_indices[0])
                 if num_valid > 0:
@@ -88,23 +88,23 @@ def train(
                     else:
                         idx_0 = valid_indices[0]
                         idx_1 = valid_indices[1]
-                    
-                    z_graph = model.projector(ae_batch[idx_0, idx_1])
-                    z_trans = model.projector(outputs[idx_0, idx_1])
-                    
-                    z_graph = nn.functional.normalize(z_graph, dim=1)
-                    z_trans = nn.functional.normalize(z_trans, dim=1)
-                    
-                    # InfoNCE Loss calculation
-                    logits = torch.matmul(z_graph, z_trans.T) / temperature
-                    labels = torch.arange(len(z_graph), device=device)
-                    # Symmetrical contrastive loss
+
+                    # Project both reconstruction views into contrastive space
+                    z_v1 = model.projector(outputs[idx_0, idx_1])
+                    z_v2 = model.projector(outputs_v2[idx_0, idx_1])
+
+                    z_v1 = nn.functional.normalize(z_v1, dim=1)
+                    z_v2 = nn.functional.normalize(z_v2, dim=1)
+
+                    # Symmetric InfoNCE between the two masked reconstruction views
+                    logits = torch.matmul(z_v1, z_v2.T) / temperature
+                    labels = torch.arange(len(z_v1), device=device)
                     loss_cl_1 = nn.functional.cross_entropy(logits, labels)
                     loss_cl_2 = nn.functional.cross_entropy(logits.T, labels)
                     loss_cl = (loss_cl_1 + loss_cl_2) / 2
                 else:
                     loss_cl = torch.tensor(0.0, device=device)
-                
+
                 loss = loss_mse + alpha * loss_cl
 
                 accumulated_loss += loss
