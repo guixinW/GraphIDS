@@ -40,3 +40,11 @@ positional_encoding:
   value: None
 fraction:
   value: 0.2
+# --- [Plan A] Cross-View Contrastive Learning Hyperparameters ---
+# Plan A: Ultra-low alpha so MSE fully dominates; CL only provides mild geometry regularization
+alpha:
+  value: 0.001
+temperature:
+  value: 0.1
+proj_dim:
+  value: 64        # Aligned with edim_out=64

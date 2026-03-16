@@ -40,3 +40,11 @@ positional_encoding:
   value: None
 fraction:
   value: null
+# --- [Plan A] Cross-View Contrastive Learning Hyperparameters ---
+# Plan A: Use alpha=0.001 so CL acts as light regularizer only
+alpha:
+  value: 0.001
+temperature:
+  value: 0.1
+proj_dim:
+  value: 96        # Aligned with edim_out=96
