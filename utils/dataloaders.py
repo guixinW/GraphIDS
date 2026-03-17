@@ -170,6 +170,9 @@ class NetFlowDataset:
                     new_attr[:, src_idx] = old_attr[:, tgt_idx]
             
             graph.edge_attr = new_attr
+            # Also resize node features (x) to match source edim_in
+            # Node features are initialized as ones(num_nodes, edim_in)
+            graph.x = torch.ones(graph.num_nodes, len(self.source_features), dtype=torch.float)
         
         self.edge_features = list(self.source_features)
 
