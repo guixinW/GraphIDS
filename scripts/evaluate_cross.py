@@ -122,22 +122,38 @@ def main():
     print(f"Device:                 {device}")
     print("-" * 60)
 
-    # ── 2. Load target dataset ─────────────────────────────────────────────
+    # ── 2. Load source dataset (just to get feature names) ─────────────────
+    print(f"Loading source dataset feature names from: {source_dataset}")
+    # Force BENIGN and NO FRACTION to get the standard schema
+    source_ds = NetFlowDataset(
+        name=source_dataset,
+        data_dir=args.data_dir,
+        fraction=None,
+        data_type="benign",
+        seed=args.seed,
+    )
+    source_features = source_ds.edge_features
+    source_edim_in = len(source_features)
+    print(f"Source dataset features: {source_edim_in}")
+
+    # ── 3. Load target dataset aligned with source ────────────────────────
+    print(f"Loading target dataset (aligned with source): {args.target_dataset}")
     target_ds = NetFlowDataset(
         name=args.target_dataset,
         data_dir=args.data_dir,
         fraction=args.target_fraction,
         data_type="benign",
         seed=args.seed,
+        source_features=source_features,
     )
 
     target_edim_in = target_ds.num_edge_features
-    print(f"Target dataset features: {target_edim_in}")
+    print(f"Target dataset features (after alignment): {target_edim_in}")
 
-    # ── 3. Build model with source architecture (original, no CL) ──────────
+    # ── 4. Build model with source architecture ────────────────────────────
     model = GraphIDS(
         ndim_in=target_ds.num_node_features,
-        edim_in=target_edim_in,
+        edim_in=source_edim_in,
         edim_out=src_cfg["edim_out"],
         embed_dim=src_cfg["ae_embedding_dim"],
         num_heads=4,

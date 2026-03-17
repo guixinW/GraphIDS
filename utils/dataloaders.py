@@ -58,12 +58,14 @@ class NetFlowDataset:
         fraction=None,
         data_type="benign",
         seed=42,
+        source_features=None,
     ):
         self.name = name
         self.data_dir = data_dir
         self.fraction = fraction
         self.data_type = data_type
         self.seed = seed
+        self.source_features = source_features
 
         # Setup directories
         graph_dir = os.path.join(data_dir, "pyg_graph_data")
@@ -76,6 +78,20 @@ class NetFlowDataset:
 
         self.raw_dir = os.path.join(data_dir, name)
         self.scaler_path = os.path.join(self.processed_dir, "scaler.pkl")
+
+        # Determine feature names from CSV header (needed for alignment even if cached)
+        df_header = pd.read_csv(os.path.join(self.raw_dir, f"{self.name}.csv"), nrows=0)
+        x_cols = df_header.drop(columns=["Attack", "Label"])
+        if "v3" in self.name:
+            self.edge_feature_names = [
+                col for col in x_cols.columns
+                if col not in ["IPV4_SRC_ADDR", "IPV4_DST_ADDR", "FLOW_END_MILLISECONDS", "FLOW_START_MILLISECONDS"]
+            ]
+        else:
+            self.edge_feature_names = [
+                col for col in x_cols.columns
+                if col not in ["IPV4_SRC_ADDR", "IPV4_DST_ADDR"]
+            ]
 
         # Handle force reload
         if force_reload and os.path.exists(self.processed_dir):
@@ -118,6 +134,44 @@ class NetFlowDataset:
         self.train_graph = torch.load(os.path.join(self.processed_dir, "train.pt"))[0]
         self.val_graph = torch.load(os.path.join(self.processed_dir, "val.pt"))[0]
         self.test_graph = torch.load(os.path.join(self.processed_dir, "test.pt"))[0]
+
+        # Apply feature alignment if requested
+        if self.source_features is not None:
+            self._align_features()
+        else:
+            self.edge_features = self.edge_feature_names
+
+    def _align_features(self):
+        """Align edge_attr columns to match source_features architecture."""
+        print(f"Aligning {self.name} features to source schema...")
+        
+        # 1. Map target feature names to indices
+        target_feat_to_idx = {name: i for i, name in enumerate(self.edge_feature_names)}
+        
+        # 2. Build the projection indices
+        projection_indices = []
+        missing_indices = []
+        for i, name in enumerate(self.source_features):
+            if name in target_feat_to_idx:
+                projection_indices.append(target_feat_to_idx[name])
+            else:
+                # Feature missing in target, we will pad with 0s
+                projection_indices.append(-1)
+                missing_indices.append(i)
+        
+        # 3. Apply projection to each graph
+        for graph in [self.train_graph, self.val_graph, self.test_graph]:
+            old_attr = graph.edge_attr
+            # Create new tensor with source dimension
+            new_attr = torch.zeros((old_attr.size(0), len(self.source_features)), device=old_attr.device)
+            
+            for src_idx, tgt_idx in enumerate(projection_indices):
+                if tgt_idx != -1:
+                    new_attr[:, src_idx] = old_attr[:, tgt_idx]
+            
+            graph.edge_attr = new_attr
+        
+        self.edge_features = list(self.source_features)
 
     def _needs_processing(self):
         """Check if processing is needed"""
@@ -170,6 +224,7 @@ class NetFlowDataset:
                 if col not in ["IPV4_SRC_ADDR", "IPV4_DST_ADDR"]
             ]
 
+        self.edge_features = edge_features
         df = pd.concat([x, y], axis=1)
 
         df_train, df_val_test = train_test_split(
