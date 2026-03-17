@@ -138,6 +138,7 @@ class NetFlowDataset:
         os.makedirs(self.processed_dir, exist_ok=True)
 
         df = pd.read_csv(os.path.join(self.raw_dir, f"{self.name}.csv"))
+        df = df.dropna()
 
         if self.fraction is not None:
             df = df.groupby(by="Attack").sample(
