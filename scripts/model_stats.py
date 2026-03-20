@@ -30,9 +30,30 @@ def main():
 
     cfg = load_yaml_config(args.config)
 
-    # 1. Parameter Statistics
+    # 1. Parameter Statistics/Inference
+    # Default to v3 (49)
     edim_in = 49 
     ndim_in = 49
+
+    # Try to determine dimensions from checkpoint if provided
+    loaded_chk = None
+    if args.checkpoint and os.path.exists(args.checkpoint):
+        print(f"Loading weights from: {args.checkpoint}")
+        loaded_chk = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+        if "model_state_dict" in loaded_chk:
+            state_dict = loaded_chk["model_state_dict"]
+            # encoder.fc_neigh.weight shape is [ndim_in, edim_in]
+            if "encoder.fc_neigh.weight" in state_dict:
+                ndim_in_chk, edim_in_chk = state_dict["encoder.fc_neigh.weight"].shape
+                ndim_in, edim_in = ndim_in_chk, edim_in_chk
+                print(f"Inferred dimensions from checkpoint: ndim_in={ndim_in}, edim_in={edim_in}")
+
+    # If no checkpoint, try to infer from dataset name in config
+    elif "dataset" in cfg:
+        if "v2" in cfg["dataset"]:
+            edim_in = 41
+            ndim_in = 41
+            print(f"Inferred v2 dimensions from config: edim_in=41, ndim_in=41")
 
     import inspect
     sig = inspect.signature(GraphIDS.__init__)
@@ -57,10 +78,8 @@ def main():
 
     model = GraphIDS(**model_args)
 
-    if args.checkpoint and os.path.exists(args.checkpoint):
-        print(f"Loading weights from: {args.checkpoint}")
-        chk = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
-        model.load_state_dict(chk["model_state_dict"], strict=False)
+    if loaded_chk:
+        model.load_state_dict(loaded_chk["model_state_dict"], strict=False)
         ckpt_size_mb = os.path.getsize(args.checkpoint) / (1024 * 1024)
     else:
         ckpt_size_mb = 0
