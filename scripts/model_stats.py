@@ -24,13 +24,13 @@ def load_yaml_config(path):
 def main():
     parser = argparse.ArgumentParser(description="Calculate GraphIDS model statistics")
     parser.add_argument("--config", type=str, required=True, help="Path to config file")
+    parser.add_argument("--checkpoint", type=str, help="Path to checkpoint file (.ckpt)")
+    parser.add_argument("--batch_size", type=int, default=64, help="Batch size for inference estimation")
     args = parser.parse_args()
 
     cfg = load_yaml_config(args.config)
 
-    # Note: These values should match your dataset features
-    # NB15-V3 has 49, IDS2018-V3 has 49.
-    # We use 49 as a representative default if not specified.
+    # 1. Parameter Statistics
     edim_in = 49 
     ndim_in = 49
 
@@ -52,34 +52,52 @@ def main():
         "mask_ratio": cfg.get("mask_ratio", 0.15),
     }
 
-    # Only add proj_dim if the model constructor supports it (CL branch)
     if "proj_dim" in sig.parameters:
         model_args["proj_dim"] = cfg.get("proj_dim", 128)
 
     model = GraphIDS(**model_args)
 
+    if args.checkpoint and os.path.exists(args.checkpoint):
+        print(f"Loading weights from: {args.checkpoint}")
+        chk = torch.load(args.checkpoint, map_location="cpu", weights_only=True)
+        model.load_state_dict(chk["model_state_dict"], strict=False)
+        ckpt_size_mb = os.path.getsize(args.checkpoint) / (1024 * 1024)
+    else:
+        ckpt_size_mb = 0
+
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    
-    # Each parameter is float32 (4 bytes)
     param_size_mb = (total_params * 4) / (1024 * 1024)
     
     print("-" * 50)
-    print(f"Model Statistics for config: {os.path.basename(args.config)}")
+    print(f"Model Statistics (Config: {os.path.basename(args.config)})")
     print("-" * 50)
+    if args.checkpoint:
+        print(f"Checkpoint File Size:  {ckpt_size_mb:.2f} MB")
     print(f"Total Parameters:      {total_params:,}")
-    print(f"Trainable Parameters:  {trainable_params:,}")
-    print(f"Model Size (Static):   {param_size_mb:.2f} MB")
+    print(f"Static Weights Memory: {param_size_mb:.2f} MB")
     print("-" * 50)
     
-    # Breakdown by component
+    # 2. Inference Memory Estimation (Dynamic)
+    window = cfg["window_size"]
+    embed = cfg["ae_embedding_dim"]
+    layers = cfg["num_layers"]
+    batch = args.batch_size
+    
+    # Heuristic for activations and attention buffers
+    activation_mem_layer = (batch * window * embed * 12 * 4) / (1024 * 1024) 
+    attn_mem_mb = (batch * 4 * (window**2) * 4) / (1024 * 1024)
+    total_dynamic_mb = (activation_mem_layer * layers) + attn_mem_mb
+    
+    print(f"\nInference Memory Estimation (Batch Size: {batch}):")
+    print(f"  Approx. Activation Memory: ~{total_dynamic_mb:.2f} MB")
+    print(f"  Total Expected VRAM:       ~{param_size_mb + total_dynamic_mb + 50:.2f} MB") 
+    print("  (Estimated for GPU inference setup)")
+    
     print("\nComponent Breakdown:")
     for name, module in model.named_children():
         params = sum(p.numel() for p in module.parameters())
         print(f"  {name:15} : {params:10,}")
-
-    print("\nNote: Memory usage during training will be significantly higher")
-    print("due to activations, gradients, and optimizer states.")
 
 if __name__ == "__main__":
     main()
