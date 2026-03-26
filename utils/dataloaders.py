@@ -59,6 +59,7 @@ class NetFlowDataset:
         data_type="benign",
         seed=42,
         source_features=None,
+        known_attacks=None,
     ):
         self.name = name
         self.data_dir = data_dir
@@ -66,6 +67,7 @@ class NetFlowDataset:
         self.data_type = data_type
         self.seed = seed
         self.source_features = source_features
+        self.known_attacks = known_attacks
 
         # Setup directories
         graph_dir = os.path.join(data_dir, "pyg_graph_data")
@@ -140,11 +142,80 @@ class NetFlowDataset:
         self.val_graph = torch.load(os.path.join(self.processed_dir, "val.pt"))[0]
         self.test_graph = torch.load(os.path.join(self.processed_dir, "test.pt"))[0]
 
+        # Load attack type labels if available
+        self.test_attack_labels = None
+        self.val_attack_labels = None
+        attack_path = os.path.join(self.processed_dir, "attack_labels.pt")
+        if os.path.exists(attack_path):
+            attack_data = torch.load(attack_path, weights_only=False)
+            self.val_attack_labels = attack_data.get("val", None)
+            self.test_attack_labels = attack_data.get("test", None)
+        elif self.known_attacks is not None:
+            # Regenerate attack labels from raw CSV to avoid re-processing
+            print("Regenerating attack labels from raw CSV...")
+            self._regenerate_attack_labels(attack_path)
+
+        # Open-set filtering: restrict val set to Benign + known attacks
+        if self.known_attacks is not None and self.val_attack_labels is not None:
+            known_set = set(self.known_attacks)
+            keep_mask = torch.tensor(
+                [a == "Benign" or a in known_set for a in self.val_attack_labels],
+                dtype=torch.bool,
+            )
+            self.val_graph.edge_index = self.val_graph.edge_index[:, keep_mask]
+            self.val_graph.edge_attr = self.val_graph.edge_attr[keep_mask]
+            self.val_graph.edge_labels = self.val_graph.edge_labels[keep_mask]
+            self.val_attack_labels = [
+                a for a, k in zip(self.val_attack_labels, keep_mask.tolist()) if k
+            ]
+
         # Apply feature alignment if requested
         if self.source_features is not None:
             self._align_features()
         else:
             self.edge_features = self.edge_feature_names
+
+    def _regenerate_attack_labels(self, save_path):
+        """Regenerate attack labels from raw CSV using the same split logic.
+
+        This reproduces the same train_test_split as _process() to extract
+        the Attack column for val/test sets without re-processing graphs.
+        """
+        df = pd.read_csv(os.path.join(self.raw_dir, f"{self.name}.csv"))
+        df = df.dropna()
+
+        if self.fraction is not None:
+            df = df.groupby(by="Attack").sample(
+                frac=self.fraction, random_state=self.seed
+            )
+
+        y = df[["Attack", "Label"]]
+
+        df_train, df_val_test = train_test_split(
+            df, test_size=0.2, random_state=self.seed, stratify=y["Attack"]
+        )
+
+        df_val, df_test = train_test_split(
+            df_val_test,
+            test_size=0.5,
+            random_state=self.seed,
+            stratify=df_val_test["Attack"],
+        )
+
+        if "v3" in self.name:
+            df_val = df_val.sort_values(by="FLOW_START_MILLISECONDS")
+            df_test = df_test.sort_values(by="FLOW_START_MILLISECONDS")
+
+        attack_labels = {
+            "train": df_train["Attack"].tolist(),
+            "val": df_val["Attack"].tolist(),
+            "test": df_test["Attack"].tolist(),
+        }
+
+        torch.save(attack_labels, save_path)
+        self.val_attack_labels = attack_labels["val"]
+        self.test_attack_labels = attack_labels["test"]
+        print(f"  Saved attack labels to {save_path}")
 
     def _align_features(self):
         """Align edge_attr columns to match source_features architecture."""
@@ -272,6 +343,7 @@ class NetFlowDataset:
         num_nodes = len(node_map)
 
         datasets = {"train": df_train, "val": df_val, "test": df_test}
+        attack_labels = {}  # Store attack type strings per split
 
         for split_name, df_split in datasets.items():
             src_nodes = np.array([node_map[ip] for ip in df_split["IPV4_SRC_ADDR"]])
@@ -292,6 +364,15 @@ class NetFlowDataset:
 
             # Save as list for compatibility
             torch.save([data], os.path.join(self.processed_dir, f"{split_name}.pt"))
+
+            # Save attack type strings for open-set evaluation
+            attack_labels[split_name] = df_split["Attack"].tolist()
+
+        # Save attack labels for open-set evaluation
+        torch.save(
+            attack_labels,
+            os.path.join(self.processed_dir, "attack_labels.pt"),
+        )
 
         # Save seed information for cache validation
         seed_file = os.path.join(self.processed_dir, ".seed")
