@@ -182,7 +182,6 @@ class NetFlowDataset:
         the Attack column for val/test sets without re-processing graphs.
         """
         df = pd.read_csv(os.path.join(self.raw_dir, f"{self.name}.csv"))
-        df = df.dropna()
 
         if self.fraction is not None:
             df = df.groupby(by="Attack").sample(
