@@ -146,11 +146,26 @@ class NetFlowDataset:
         self.test_attack_labels = None
         self.val_attack_labels = None
         attack_path = os.path.join(self.processed_dir, "attack_labels.pt")
+        
+        need_regenerate = True
         if os.path.exists(attack_path):
-            attack_data = torch.load(attack_path, weights_only=False)
-            self.val_attack_labels = attack_data.get("val", None)
-            self.test_attack_labels = attack_data.get("test", None)
-        elif self.known_attacks is not None:
+            try:
+                attack_data = torch.load(attack_path, weights_only=False)
+                val_labels = attack_data.get("val", [])
+                test_labels = attack_data.get("test", [])
+                
+                # Verify that the cached labels match the graph sizes
+                if len(val_labels) == self.val_graph.edge_index.size(1) and \
+                   len(test_labels) == self.test_graph.edge_index.size(1):
+                    self.val_attack_labels = val_labels
+                    self.test_attack_labels = test_labels
+                    need_regenerate = False
+                else:
+                    print("Cached attack_labels size mismatch. Will regenerate...")
+            except Exception as e:
+                print(f"Failed to load attack_labels: {e}")
+        
+        if need_regenerate and self.known_attacks is not None:
             # Regenerate attack labels from raw CSV to avoid re-processing
             print("Regenerating attack labels from raw CSV...")
             self._regenerate_attack_labels(attack_path)
