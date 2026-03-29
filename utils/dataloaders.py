@@ -189,7 +189,13 @@ class NetFlowDataset:
                 frac=self.fraction, random_state=self.seed
             )
 
+        x = df.drop(columns=["Attack", "Label"])
         y = df[["Attack", "Label"]]
+
+        x = x.replace([np.inf, -np.inf], np.nan)
+        x = x.fillna(0)
+
+        df = pd.concat([x, y], axis=1)
 
         df_train, df_val_test = train_test_split(
             df, test_size=0.2, random_state=self.seed, stratify=y["Attack"]
@@ -203,6 +209,7 @@ class NetFlowDataset:
         )
 
         if "v3" in self.name:
+            df_train = df_train.sort_values(by="FLOW_START_MILLISECONDS")
             df_val = df_val.sort_values(by="FLOW_START_MILLISECONDS")
             df_test = df_test.sort_values(by="FLOW_START_MILLISECONDS")
 
